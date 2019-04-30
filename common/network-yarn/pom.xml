@@ -128,6 +128,31 @@
           </execution>
         </executions>
       </plugin>
+      <!-- shade the native netty libs as well -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-antrun-plugin</artifactId>
+        <executions>
+          <execution>
+            <id>unpack</id>
+            <phase>package</phase>
+            <configuration>
+                <target>
+                    <echo message="unjar" />
+                    <unzip src="${shuffle.jar}" dest="${project.build.directory}/exploded/" />
+                    <move file="${project.build.directory}/exploded/META-INF/native/libnetty_transport_native_epoll_x86_64.so"
+                          tofile="${project.build.directory}/exploded/META-INF/native/liborg_spark_project_netty_transport_native_epoll_x86_64.so" />
+                    <move file="${project.build.directory}/exploded/META-INF/native/libnetty_transport_native_kqueue_x86_64.jnilib"
+                          tofile="${project.build.directory}/exploded/META-INF/native/liborg_spark_project_netty_transport_native_kqueue_x86_64.jnilib" />
+                    <jar destfile="${shuffle.jar}" basedir="${project.build.directory}/exploded" />
+                </target>
+            </configuration>
+            <goals>
+              <goal>run</goal>
+            </goals>
+          </execution>
+        </executions>
+    </plugin>
 
       <!-- probes to validate that those dependencies which must be shaded are  -->
       <plugin>
