@@ -53,6 +53,11 @@ private[spark] abstract class Spillable[C](taskMemoryManager: TaskMemoryManager)
   private[this] val initialMemoryThreshold: Long =
     SparkEnv.get.conf.getLong("spark.shuffle.spill.initialMemoryThreshold", 5 * 1024 * 1024)
 
+  // Force this collection to spill when its size is greater than this threshold
+  private[this] val maxSizeForceSpillThreshold: Long =
+    SparkEnv.get.conf.getSizeAsBytes("spark.shuffle.spill.reduce.maxRecordsSizeForSpillThreshold",
+    Long.MaxValue)
+
   // Force this collection to spill when there are this many elements in memory
   // For testing only
   private[this] val numElementsForceSpillThreshold: Int =
@@ -81,7 +86,10 @@ private[spark] abstract class Spillable[C](taskMemoryManager: TaskMemoryManager)
    */
   protected def maybeSpill(collection: C, currentMemory: Long): Boolean = {
     var shouldSpill = false
-    if (elementsRead % 32 == 0 && currentMemory >= myMemoryThreshold) {
+    if (_elementsRead > numElementsForceSpillThreshold
+      || currentMemory > maxSizeForceSpillThreshold) {
+      shouldSpill = true
+    } else if (elementsRead % 32 == 0 && currentMemory >= myMemoryThreshold) {
       // Claim up to double our current memory from the shuffle memory pool
       val amountToRequest = 2 * currentMemory - myMemoryThreshold
       val granted = acquireMemory(amountToRequest)
@@ -90,11 +98,10 @@ private[spark] abstract class Spillable[C](taskMemoryManager: TaskMemoryManager)
       // or we already had more memory than myMemoryThreshold), spill the current collection
       shouldSpill = currentMemory >= myMemoryThreshold
     }
-    shouldSpill = shouldSpill || _elementsRead > numElementsForceSpillThreshold
     // Actually spill
     if (shouldSpill) {
       _spillCount += 1
-      logSpillage(currentMemory)
+      logSpillage(currentMemory, elementsRead)
       spill(collection)
       _elementsRead = 0
       _memoryBytesSpilled += currentMemory
@@ -141,10 +148,10 @@ private[spark] abstract class Spillable[C](taskMemoryManager: TaskMemoryManager)
    *
    * @param size number of bytes spilled
    */
-  @inline private def logSpillage(size: Long) {
+  @inline private def logSpillage(size: Long, elements: Int) {
     val threadId = Thread.currentThread().getId
-    logInfo("Thread %d spilling in-memory map of %s to disk (%d time%s so far)"
-      .format(threadId, org.apache.spark.util.Utils.bytesToString(size),
+    logInfo("Thread %d spilling in-memory map of %s (elements: %d) to disk (%d time%s so far)"
+      .format(threadId, org.apache.spark.util.Utils.bytesToString(size), elements,
         _spillCount, if (_spillCount > 1) "s" else ""))
   }
 }

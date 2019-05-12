@@ -41,7 +41,7 @@ import org.apache.spark.util.collection.OpenHashSet
  * estimate the size. However, a [[KnownSizeEstimation]] can provide a better estimation without
  * using [[SizeEstimator]].
  */
-private[spark] trait KnownSizeEstimation {
+private[spark] trait KnownSizeEstimation { //TODO
   def estimatedSize: Long
 }
 

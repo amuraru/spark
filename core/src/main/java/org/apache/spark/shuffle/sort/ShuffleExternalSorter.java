@@ -82,6 +82,11 @@ final class ShuffleExternalSorter extends MemoryConsumer {
    */
   private final int numElementsForSpillThreshold;
 
+  /**
+   * Force this sorter to spill when the size in memory is beyond this threshold.
+   */
+  private final long maxRecordsSizeForSpillThreshold;
+
   /** The buffer size to use when writing spills using DiskBlockObjectWriter */
   private final int fileBufferSizeBytes;
 
@@ -105,6 +110,7 @@ final class ShuffleExternalSorter extends MemoryConsumer {
   @Nullable private ShuffleInMemorySorter inMemSorter;
   @Nullable private MemoryBlock currentPage = null;
   private long pageCursor = -1;
+  @Nullable private long inMemRecordsSize = 0;
 
   ShuffleExternalSorter(
       TaskMemoryManager memoryManager,
@@ -126,6 +132,8 @@ final class ShuffleExternalSorter extends MemoryConsumer {
         (int) (long) conf.get(package$.MODULE$.SHUFFLE_FILE_BUFFER_SIZE()) * 1024;
     this.numElementsForSpillThreshold =
         (int) conf.get(package$.MODULE$.SHUFFLE_SPILL_NUM_ELEMENTS_FORCE_SPILL_THRESHOLD());
+    this.maxRecordsSizeForSpillThreshold =
+        conf.getSizeAsBytes("spark.shuffle.spill.map.maxRecordsSizeForSpillThreshold", Long.MAX_VALUE);
     this.writeMetrics = writeMetrics;
     this.inMemSorter = new ShuffleInMemorySorter(
       this, initialSize, conf.getBoolean("spark.shuffle.sort.useRadixSort", true));
@@ -264,6 +272,7 @@ final class ShuffleExternalSorter extends MemoryConsumer {
     writeSortedFile(false);
     final long spillSize = freeMemory();
     inMemSorter.reset();
+
     // Reset the in-memory sorter's pointer array only after freeing up the memory pages holding the
     // records. Otherwise, if the task is over allocated memory, then without freeing the memory
     // pages, we might not be able to get memory for the pointer array.
@@ -304,6 +313,7 @@ final class ShuffleExternalSorter extends MemoryConsumer {
     allocatedPages.clear();
     currentPage = null;
     pageCursor = 0;
+    inMemRecordsSize = 0;
     return memoryFreed;
   }
 
@@ -384,10 +394,19 @@ final class ShuffleExternalSorter extends MemoryConsumer {
 
     // for tests
     assert(inMemSorter != null);
-    if (inMemSorter.numRecords() >= numElementsForSpillThreshold) {
-      logger.info("Spilling data because number of spilledRecords crossed the threshold " +
-        numElementsForSpillThreshold);
-      spill();
+    if (inMemSorter.numRecords() % 32 == 0) {
+      //check memory usage on every 32th record inserted
+      if (inMemSorter.numRecords() >= numElementsForSpillThreshold) {
+        logger.info("Spilling data because number of spilledRecords ({}) crossed the threshold: {}",
+            inMemSorter.numRecords(), numElementsForSpillThreshold);
+        spill();
+      } else {
+        if (inMemRecordsSize >= maxRecordsSizeForSpillThreshold) {
+          logger.info("Spilling data because size of spilledRecords ({}) crossed the threshold: {}",
+              inMemRecordsSize, maxRecordsSizeForSpillThreshold);
+          spill();
+        }
+      }
     }
 
     growPointerArrayIfNecessary();
@@ -404,6 +423,7 @@ final class ShuffleExternalSorter extends MemoryConsumer {
     Platform.copyMemory(recordBase, recordOffset, base, pageCursor, length);
     pageCursor += length;
     inMemSorter.insertRecord(recordAddress, partitionId);
+    inMemRecordsSize += length;
   }
 
   /**
